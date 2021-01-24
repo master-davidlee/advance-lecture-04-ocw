@@ -45,7 +45,7 @@ use serde::{Deserialize, Deserializer};
 /// When an offchain worker is signing transactions it's going to request keys from type
 /// `KeyTypeId` via the keystore to sign the transaction.
 /// The keys can be inserted manually via RPC (see `author_insertKey`).
-pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"demo");
+pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"work");
 pub const NUM_VEC_LEN: usize = 10;
 /// The type to sign and send transactions.
 pub const UNSIGNED_TXS_PRIORITY: u64 = 100;
@@ -92,7 +92,7 @@ pub mod crypto {
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug)]
 pub struct Payload<Public> {
-	number: u32,
+	price: u32,
 	public: Public
 }
 
@@ -214,11 +214,11 @@ decl_module! {
 			let _ = ensure_none(origin)?;
 			// we don't need to verify the signature here because it has been verified in
 			//   `validate_unsigned` function when sending out the unsigned tx.
-			let Payload { number, public } = payload;
-			debug::info!("submit_number_unsigned_with_signed_payload: ({}, {:?})", number, public);
-			Self::append_or_replace_number(number);
+			let Payload { price, public } = payload;
+			debug::info!("submit_number_unsigned_with_signed_payload: ({}, {:?})", price, public);
+			Self::append_or_replace_number(price);
 
-			Self::deposit_event(RawEvent::NewNumber(None, number));
+			Self::deposit_event(RawEvent::NewNumber(None, price));
 			Ok(())
 		}
 
@@ -425,7 +425,7 @@ impl<T: Trait> Module<T> {
 		//   - `Some((account, Ok(())))`: transaction is successfully sent
 		//   - `Some((account, Err(())))`: error occured when sending the transaction
 		if let Some((_, res)) = signer.send_unsigned_transaction(
-			|acct| Payload { number, public: acct.public.clone() },
+			|acct| Payload { price, public: acct.public.clone() },
 			Call::submit_number_unsigned_with_signed_payload
 		) {
 			return res.map_err(|_| {
@@ -438,6 +438,29 @@ impl<T: Trait> Module<T> {
 		debug::error!("No local account available");
 		Err(<Error<T>>::NoLocalAcctForSigning)
 	}
+
+	fn fetch_price_from_coincap(json_val: JsonValue) -> Result<u64> {
+		// Expected JSON shape:
+		//   r#"{"data":{"priceUsd":"8172.2628346190447316"}}"#;
+	
+		const PRICE_KEY: &[u8] = b"priceUsd";
+		let data = json_val.get_object()[0].1.get_object();
+	
+		let (_, v) = data.iter()
+		  .filter(|(k, _)| PRICE_KEY.to_vec() == Self::vecchars_to_vecbytes(k))
+		  .nth(0)
+		  .ok_or("fetch_price_from_coincap: JSON does not conform to expectation")?;
+	
+		// `val` contains the price, such as "222.333" in bytes form
+		let val_u8: Vec<u8> = v.get_bytes();
+	
+		// Convert to number
+		let val_f64: f64 = core::str::from_utf8(&val_u8)
+		  .map_err(|_| "fetch_price_from_coincap: val_f64 convert to string error")?
+		  .parse::<f64>()
+		  .map_err(|_| "fetch_price_from_coincap: val_u8 parsing to f64 error")?;
+		Ok((val_f64 * 10000.).round() as u64)
+	  }
 }
 
 impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
